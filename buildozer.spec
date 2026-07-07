@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
 # Dependencias de Python. IMPORTANTE: opencv y numpy para el conteo.
-requirements = python3,kivy==2.3.0,numpy,opencv,pyjnius,android
+requirements = python3,kivy==2.3.0,numpy,opencv
 
 # Orientacion de pantalla
 orientation = portrait
