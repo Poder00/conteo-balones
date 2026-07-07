@@ -1,0 +1,29 @@
+name: Compilar APK
+
+# Se ejecuta cada vez que subes cambios a la rama main,
+# o manualmente desde la pestana Actions de GitHub.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el codigo
+        uses: actions/checkout@v4
+
+      - name: Compilar APK con Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          buildozer_version: stable
+
+      - name: Subir el APK como artefacto descargable
+        uses: actions/upload-artifact@v4
+        with:
+          name: conteo-balones-apk
+          path: ${{ steps.buildozer.outputs.filename }}
