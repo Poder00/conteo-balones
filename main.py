@@ -1,24 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-DETECTOR DE BALONES DE GLP - App Android v2 (Kivy + NumPy)
+DETECTOR DE BALONES DE GLP - App Android v3 (Kivy + NumPy)
 ===========================================================
-El celular cuenta los llenados de balones solo, con su propia camara.
-Conteo con NumPy puro (sin OpenCV). Tema blanco con acentos azules.
+Cuenta llenados de balones con la camara del celular. NumPy puro (sin OpenCV).
+Tema blanco / azul.
 
-Flujo de 3 pantallas:
-  1. CONFIGURACION: tiempo de llenado (seg) + nombre del operador
-  2. CAMARA: video vertical grande, area (ROI), botones por etapa
-  3. REPORTE: resumen a pantalla completa + guardado
+v3: ARREGLO DE CAMARA
+  - Ya NO se fuerza la resolucion (evita "setParameters failed").
+  - Se deja que la camara use la resolucion que soporte y el ROI se adapta.
 
-Mejoras v2:
-  - Tema blanco / azul
-  - Tiempo de llenado configurable desde la pantalla inicial
-  - Camara VERTICAL que llena el ancho (arregla tamano, posicion y ROI)
-  - Rotacion de imagen opcional (por si el sensor entrega de lado)
-  - Botones que aparecen por etapa
-  - Boton REGRESAR y PAUSAR
-  - Reporte a pantalla completa
-  - Sin botones -1 / +1, sin logo
+Flujo: Configuracion -> Camara -> Reporte
 """
 
 import os
@@ -44,24 +35,21 @@ from kivy.metrics import dp
 import numpy as np
 
 # ===========================================================================
-# CONFIGURACION POR DEFECTO
+# CONFIGURACION
 # ===========================================================================
-UMBRAL_DIFERENCIA = 40          # 0-255: cuanto debe cambiar un pixel
-PORCENTAJE_OCUPACION = 0.25     # fraccion del area que debe cambiar
+UMBRAL_DIFERENCIA = 40
+PORCENTAJE_OCUPACION = 0.25
 SEGUNDOS_CONFIRMACION = 1.5
 SEGUNDOS_VACIADO = 2.0
 
-# --- ROTACION DE LA CAMARA ---
-# Si la imagen sale de lado, cambia este valor: 0, 90, 180 o 270.
-# En muchos celulares Android la camara trasera necesita 90 o 270.
+# Si la imagen sale de lado, cambia: 0, 90, 180 o 270.
 ROTACION_CAMARA = 90
 
-# --- Paleta (tema blanco / azul) ---
-C_AZUL = get_color_from_hex("#185FA5")       # azul principal (botones)
-C_AZUL_CLARO = get_color_from_hex("#378ADD")  # azul de resalte (ROI, contando)
-C_AZUL_OSCURO = get_color_from_hex("#042C53")  # texto titulos
+C_AZUL = get_color_from_hex("#185FA5")
+C_AZUL_CLARO = get_color_from_hex("#378ADD")
+C_AZUL_OSCURO = get_color_from_hex("#042C53")
 C_BLANCO = get_color_from_hex("#FFFFFF")
-C_FONDO = get_color_from_hex("#F7F9FB")       # fondo general
+C_FONDO = get_color_from_hex("#F7F9FB")
 C_GRIS_TEXTO = get_color_from_hex("#374151")
 C_GRIS_SUAVE = get_color_from_hex("#9CA3AF")
 C_BORDE = get_color_from_hex("#D1D5DB")
@@ -81,9 +69,6 @@ def carpeta_datos():
     return ruta
 
 
-# ===========================================================================
-# HELPERS NUMPY (reemplazo de OpenCV)
-# ===========================================================================
 def a_gris(rgb):
     r = rgb[:, :, 0].astype(np.float32)
     g = rgb[:, :, 1].astype(np.float32)
@@ -102,17 +87,14 @@ def fraccion_diferente(ref, act, umbral):
     return float(cambiados) / diff.size if diff.size > 0 else 0.0
 
 
-# ===========================================================================
-# WIDGET BOTON REDONDEADO (bonito)
-# ===========================================================================
 class BotonBonito(Button):
     def __init__(self, color_fondo=None, color_texto=None, borde=None, **kwargs):
         super().__init__(**kwargs)
         self.background_normal = ''
-        self.background_color = (0, 0, 0, 0)  # transparente, dibujamos nosotros
+        self.background_color = (0, 0, 0, 0)
         self._cf = color_fondo if color_fondo else C_AZUL
         self._ct = color_texto if color_texto else C_BLANCO
-        self._borde = borde  # (color, grosor) o None
+        self._borde = borde
         self.color = self._ct
         self.bold = True
         self.font_size = '16sp'
@@ -139,16 +121,12 @@ class BotonBonito(Button):
 
 
 def campo_texto(hint=''):
-    ti = TextInput(hint_text=hint, multiline=False, font_size='17sp',
-                   size_hint=(1, None), height=dp(48),
-                   background_color=C_FONDO, foreground_color=C_AZUL_OSCURO,
-                   cursor_color=C_AZUL, padding=[dp(14), dp(13)])
-    return ti
+    return TextInput(hint_text=hint, multiline=False, font_size='17sp',
+                     size_hint=(1, None), height=dp(48),
+                     background_color=C_FONDO, foreground_color=C_AZUL_OSCURO,
+                     cursor_color=C_AZUL, padding=[dp(14), dp(13)])
 
 
-# ===========================================================================
-# MAQUINA DE ESTADOS
-# ===========================================================================
 class Contador:
     def __init__(self):
         self.referencia = None
@@ -171,7 +149,6 @@ class Contador:
         ahora = time.time()
         self.frac = fraccion_diferente(self.referencia, gris, UMBRAL_DIFERENCIA)
         ocupada = self.frac >= PORCENTAJE_OCUPACION
-
         if self.estado == 'VACIA':
             if ocupada:
                 if self.t_ocupacion is None:
@@ -204,9 +181,6 @@ class Contador:
         return False
 
 
-# ===========================================================================
-# PANTALLA 1: CONFIGURACION
-# ===========================================================================
 class PantallaConfig(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -214,11 +188,8 @@ class PantallaConfig(Screen):
             Color(*C_BLANCO)
             self._bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._u, size=self._u)
-
         root = BoxLayout(orientation='vertical', padding=[dp(24), dp(30)],
                          spacing=dp(16))
-
-        # Encabezado con icono
         head = BoxLayout(orientation='vertical', size_hint=(1, 0.32), spacing=dp(6))
         icono = Widget(size_hint=(1, 0.6))
         with icono.canvas:
@@ -234,8 +205,6 @@ class PantallaConfig(Screen):
                               font_size='13sp', color=C_GRIS_SUAVE,
                               size_hint=(1, 0.15)))
         root.add_widget(head)
-
-        # Campo tiempo
         root.add_widget(Label(text='[b]Tiempo estimado de un llenado (seg)[/b]',
                               markup=True, halign='left', font_size='13sp',
                               color=C_GRIS_TEXTO, size_hint=(1, None), height=dp(20),
@@ -244,26 +213,20 @@ class PantallaConfig(Screen):
         self.inp_tiempo.text = '15'
         self.inp_tiempo.input_filter = 'int'
         root.add_widget(self.inp_tiempo)
-
-        # Campo operador
         root.add_widget(Label(text='[b]Operador que abre el turno[/b]',
                               markup=True, halign='left', font_size='13sp',
                               color=C_GRIS_TEXTO, size_hint=(1, None), height=dp(20),
                               text_size=(Window.width - dp(48), None)))
         self.inp_op = campo_texto('Ej: Juan Perez')
         root.add_widget(self.inp_op)
-
         self.msg = Label(text='', font_size='13sp', color=C_ROJO,
                          size_hint=(1, None), height=dp(24))
         root.add_widget(self.msg)
-
-        root.add_widget(Widget())  # espaciador
-
+        root.add_widget(Widget())
         btn = BotonBonito(text='COMENZAR', color_fondo=C_AZUL,
                           size_hint=(1, None), height=dp(54))
         btn.bind(on_press=self.comenzar)
         root.add_widget(btn)
-
         self.add_widget(root)
 
     def _u(self, *a):
@@ -296,9 +259,6 @@ class PantallaConfig(Screen):
         self.manager.current = 'camara'
 
 
-# ===========================================================================
-# PANTALLA 2: CAMARA
-# ===========================================================================
 class OverlayROI(Widget):
     def __init__(self, pantalla, **kwargs):
         super().__init__(**kwargs)
@@ -324,33 +284,25 @@ class PantallaCamara(Screen):
         self.contador = Contador()
         self.contando = False
         self.definiendo = False
-        self.roi = [0.3, 0.3, 0.7, 0.7]   # fraccion (0-1)
+        self.roi = [0.3, 0.3, 0.7, 0.7]
         self._arr = False
         self.cam = None
-        self.etapa = 'inicio'  # inicio -> area_lista -> ref_lista -> contando
+        self.etapa = 'inicio'
         self._built = False
+        self._rot = ROTACION_CAMARA
 
     def on_enter(self):
         if self._built:
             return
         self._built = True
         self.contador.t_min = App.get_running_app().tiempo_llenado
-
         with self.canvas.before:
             Color(*C_BLANCO)
             self._bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._u, size=self._u)
-
         root = BoxLayout(orientation='vertical')
 
-        # --- Barra superior ---
         top = BoxLayout(size_hint=(1, None), height=dp(70), padding=[dp(16), dp(10)])
-        with top.canvas.before:
-            Color(*C_BLANCO)
-            self._tb = Rectangle()
-            Color(*get_color_from_hex("#EEF1F4"))
-            self._tl = Rectangle()  # linea inferior
-        top.bind(pos=self._top_bg, size=self._top_bg)
         self.lbl_conteo = Label(text='[b]0[/b]', markup=True, font_size='36sp',
                                 color=C_AZUL, size_hint=(None, 1), width=dp(80),
                                 halign='left', valign='middle')
@@ -367,15 +319,16 @@ class PantallaCamara(Screen):
         top.add_widget(self.lbl_estado)
         root.add_widget(top)
 
-        # --- Camara (vertical, llena ancho) ---
         cam_box = FloatLayout(size_hint=(1, 1))
+        # --- ARREGLO CLAVE: NO forzar resolucion ---
+        # Se deja que la camara elija la resolucion que soporte.
         try:
-            # Resolucion VERTICAL para que coincida con el celular
-            self.cam = Camera(play=True, resolution=(480, 640),
-                              allow_stretch=True, keep_ratio=True)
+            self.cam = Camera(play=True)
+            self.cam.allow_stretch = True
+            self.cam.keep_ratio = True
         except Exception as e:
             self.cam = Label(text='No se pudo abrir la camara:\n%s' % e,
-                             color=C_GRIS_TEXTO)
+                             color=C_GRIS_TEXTO, font_size='11sp')
         self.cam.size_hint = (1, 1)
         cam_box.add_widget(self.cam)
         self.overlay = OverlayROI(self)
@@ -386,14 +339,11 @@ class PantallaCamara(Screen):
                      on_touch_up=self._tu)
         root.add_widget(cam_box)
 
-        # --- Panel de botones (cambia por etapa) ---
         self.panel = BoxLayout(orientation='vertical', size_hint=(1, None),
                                height=dp(150), padding=[dp(14), dp(10)],
                                spacing=dp(9))
         root.add_widget(self.panel)
-
         self.add_widget(root)
-        self._rot = ROTACION_CAMARA
         Clock.schedule_interval(self._tick, 1.0 / 10.0)
         self._construir_botones()
 
@@ -401,19 +351,8 @@ class PantallaCamara(Screen):
         self._bg.pos = self.pos
         self._bg.size = self.size
 
-    def _top_bg(self, *a):
-        t = self.children[0].children[-1] if self.children else None
-        # dibuja fondo barra
-        self._tb.pos = (0, Window.height - dp(70))
-        self._tb.size = (Window.width, dp(70))
-        self._tl.pos = (0, Window.height - dp(71))
-        self._tl.size = (Window.width, dp(1))
-
-    # ----- Botones por etapa -----
     def _construir_botones(self):
         self.panel.clear_widgets()
-
-        # Texto de ayuda por etapa
         ayudas = {
             'inicio': 'Paso 1: define el area del tanque',
             'area_lista': 'Paso 2: con el area vacia, captura la referencia',
@@ -423,8 +362,6 @@ class PantallaCamara(Screen):
         self.panel.add_widget(Label(text=ayudas.get(self.etapa, ''),
                                     font_size='11sp', color=C_GRIS_SUAVE,
                                     size_hint=(1, None), height=dp(18)))
-
-        # Boton principal segun etapa
         if self.etapa == 'inicio':
             b = BotonBonito(text='DEFINIR AREA' if not self.definiendo
                             else 'ARRASTRA EN EL VIDEO...', color_fondo=C_AZUL,
@@ -446,32 +383,27 @@ class PantallaCamara(Screen):
                             size_hint=(1, None), height=dp(50))
             b.bind(on_press=self.pausar)
             self.panel.add_widget(b)
-
-        # Fila inferior: REGRESAR + CERRAR TURNO
         fila = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
         b_reg = BotonBonito(text='REGRESAR', color_texto=C_GRIS_TEXTO,
                             borde=(C_BORDE, dp(1.5)), size_hint=(0.5, 1))
         b_reg.font_size = '13sp'
         b_reg.bind(on_press=self.regresar)
         fila.add_widget(b_reg)
-        b_cer = BotonBonito(text='CERRAR TURNO', color_texto=get_color_from_hex("#A32D2D"),
+        b_cer = BotonBonito(text='CERRAR TURNO',
+                            color_texto=get_color_from_hex("#A32D2D"),
                             borde=(C_ROJO, dp(1.5)), size_hint=(0.5, 1))
         b_cer.font_size = '13sp'
         b_cer.bind(on_press=self.cerrar_turno)
         fila.add_widget(b_cer)
         self.panel.add_widget(fila)
 
-    # ----- Geometria del ROI (CORREGIDA para camara vertical) -----
     def _area_video(self):
-        """Devuelve (x, y, w, h) reales del video dentro del cam_box,
-        respetando la proporcion (keep_ratio) para que el ROI cuadre."""
         box = self._cam_box
         if not isinstance(self.cam, Camera) or self.cam.texture is None:
             return box.x, box.y, box.width, box.height
         tw, th = self.cam.texture.size
         if tw == 0 or th == 0:
             return box.x, box.y, box.width, box.height
-        # Con rotacion 90/270 se intercambian ancho y alto
         if self._rot in (90, 270):
             tw, th = th, tw
         escala = min(box.width / tw, box.height / th)
@@ -510,7 +442,6 @@ class PantallaCamara(Screen):
     def _tu(self, w, t):
         if self._arr:
             self._arr = False
-            # Al soltar, si el area es valida, pasa de etapa
             if abs(self.roi[2] - self.roi[0]) > 0.05 and \
                abs(self.roi[3] - self.roi[1]) > 0.05:
                 self.definiendo = False
@@ -522,15 +453,16 @@ class PantallaCamara(Screen):
         self.definiendo = not self.definiendo
         self._construir_botones()
 
-    # ----- Extraer ROI en gris (con rotacion) -----
     def _roi_gris(self):
         if not isinstance(self.cam, Camera) or self.cam.texture is None:
             return None
         tex = self.cam.texture
         w, h = tex.size
-        arr = np.frombuffer(tex.pixels, dtype=np.uint8).reshape(h, w, 4)
+        try:
+            arr = np.frombuffer(tex.pixels, dtype=np.uint8).reshape(h, w, 4)
+        except Exception:
+            return None
         rgb = arr[:, :, :3]
-        # Aplicar rotacion si hace falta
         if self._rot == 90:
             rgb = np.rot90(rgb, k=1)
         elif self._rot == 180:
@@ -568,7 +500,6 @@ class PantallaCamara(Screen):
         self._construir_botones()
 
     def regresar(self, *a):
-        # Retrocede una etapa
         if self.etapa == 'contando':
             self.contando = False
             self.etapa = 'ref_lista'
@@ -578,7 +509,7 @@ class PantallaCamara(Screen):
         elif self.etapa == 'area_lista':
             self.etapa = 'inicio'
             self.definiendo = False
-        else:  # inicio -> volver a configuracion
+        else:
             self.manager.current = 'config'
             return
         self._construir_botones()
@@ -600,9 +531,6 @@ class PantallaCamara(Screen):
         self.manager.current = 'reporte'
 
 
-# ===========================================================================
-# PANTALLA 3: REPORTE (pantalla completa)
-# ===========================================================================
 class PantallaReporte(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -621,8 +549,6 @@ class PantallaReporte(Screen):
     def on_enter(self):
         self.root.clear_widgets()
         t = App.get_running_app().turno
-
-        # Icono check
         icono = Widget(size_hint=(1, 0.16))
         with icono.canvas:
             Color(*get_color_from_hex("#E6F1FB"))
@@ -630,15 +556,12 @@ class PantallaReporte(Screen):
         icono.bind(pos=lambda *a: self._pos_ic(icono),
                    size=lambda *a: self._pos_ic(icono))
         self.root.add_widget(icono)
-
         self.root.add_widget(Label(text='[b]Turno cerrado[/b]', markup=True,
                                    font_size='22sp', color=C_AZUL_OSCURO,
                                    size_hint=(1, None), height=dp(30)))
         self.root.add_widget(Label(text='Reporte guardado correctamente',
                                    font_size='13sp', color=C_GRIS_SUAVE,
                                    size_hint=(1, None), height=dp(20)))
-
-        # Tarjeta resumen
         card = BoxLayout(orientation='vertical', size_hint=(1, 0.5),
                          padding=[dp(18), dp(16)], spacing=dp(4))
         with card.canvas.before:
@@ -663,21 +586,17 @@ class PantallaReporte(Screen):
         card.add_widget(fila('Cierre', '[b]%s[/b]\n%s' % (
             t.get('operador_cierre', '--'),
             t.get('hora_cierre', '--')[-8:])))
-
         card.add_widget(Label(text='TOTAL DE BALONES', font_size='11sp',
                               color=C_GRIS_SUAVE, size_hint=(1, None), height=dp(20)))
         card.add_widget(Label(text='[b]%d[/b]' % t.get('total_balones', 0),
                               markup=True, font_size='52sp', color=C_AZUL,
                               size_hint=(1, None), height=dp(64)))
         self.root.add_widget(card)
-
         self.root.add_widget(Widget())
-
         btn = BotonBonito(text='NUEVO TURNO', color_fondo=C_AZUL,
                           size_hint=(1, None), height=dp(54))
         btn.bind(on_press=self.nuevo)
         self.root.add_widget(btn)
-
         self._guardar(t)
 
     def _pos_ic(self, w):
@@ -718,9 +637,6 @@ class PantallaReporte(Screen):
         self.manager.current = 'config'
 
 
-# ===========================================================================
-# APP
-# ===========================================================================
 class DetectorApp(App):
     def build(self):
         self.turno = {}
