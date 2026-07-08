@@ -8,36 +8,21 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    container: kivy/buildozer:latest
 
     steps:
       - name: Descargar el codigo
         uses: actions/checkout@v4
 
-      - name: Instalar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Instalar dependencias del sistema
+      - name: Arreglar permisos del directorio
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk python3-pip \
-            autoconf libtool pkg-config zlib1g-dev \
-            libncurses5-dev libncursesw5-dev libtinfo6 \
-            cmake libffi-dev libssl-dev build-essential \
-            ccache libltdl-dev
+          git config --global --add safe.directory '*'
+          chmod -R a+rwx . || true
 
-      - name: Instalar Buildozer y Cython
-        run: |
-          pip install --upgrade pip
-          pip install buildozer cython==0.29.36
-
-      - name: Compilar APK
+      - name: Compilar APK con imagen oficial de Kivy
         run: |
           export ANDROID_ACCEPT_SDK_LICENSE=1
-          rm -rf .buildozer ~/.buildozer
-          yes | buildozer android debug
+          buildozer android debug
 
       - name: Subir el APK
         uses: actions/upload-artifact@v4
