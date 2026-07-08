@@ -42,5 +42,5 @@ jobs:
       - name: Subir el APK
         uses: actions/upload-artifact@v4
         with:
-          name: conteo-balones-apk
+          name: detector-balones-apk
           path: bin/*.apk
