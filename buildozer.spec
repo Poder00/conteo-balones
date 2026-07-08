@@ -8,7 +8,7 @@ source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
 # Dependencias: SIN opencv. Solo kivy + numpy. Mucho mas probable que compile.
-requirements = python3,kivy,numpy,pillow
+requirements = python3,kivy,numpy
 
 orientation = portrait
 fullscreen = 0
