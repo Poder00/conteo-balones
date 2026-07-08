@@ -43,7 +43,7 @@ SEGUNDOS_CONFIRMACION = 1.5
 SEGUNDOS_VACIADO = 2.0
 
 # Si la imagen sale de lado, cambia: 0, 90, 180 o 270.
-ROTACION_CAMARA = 90
+ROTACION_CAMARA = 0
 
 C_AZUL = get_color_from_hex("#185FA5")
 C_AZUL_CLARO = get_color_from_hex("#378ADD")
