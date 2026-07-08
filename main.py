@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-DETECTOR DE BALONES DE GLP - App Android v3 (Kivy + NumPy)
+DETECTOR DE BALONES DE GLP - App Android v4 (Kivy + NumPy)
 ===========================================================
 Cuenta llenados de balones con la camara del celular. NumPy puro (sin OpenCV).
 Tema blanco / azul.
 
-v3: ARREGLO DE CAMARA
-  - Ya NO se fuerza la resolucion (evita "setParameters failed").
-  - Se deja que la camara use la resolucion que soporte y el ROI se adapta.
+v4: ROTACION ARREGLADA
+  - La imagen se dibuja YA ROTADA en un lienzo propio: lo que ves y lo que se
+    analiza usan la MISMA rotacion.
+  - Boton "ROTAR" en la app: gira 90 grados por toque, sin recompilar.
+  - La rotacion elegida se recuerda para el analisis del area.
 
 Flujo: Configuracion -> Camara -> Reporte
 """
@@ -25,8 +27,10 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.camera import Camera
+from kivy.uix.image import Image
 from kivy.uix.widget import Widget
 from kivy.graphics import Color, Line, RoundedRectangle, Rectangle
+from kivy.graphics.texture import Texture
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.utils import platform, get_color_from_hex
@@ -41,9 +45,7 @@ UMBRAL_DIFERENCIA = 40
 PORCENTAJE_OCUPACION = 0.25
 SEGUNDOS_CONFIRMACION = 1.5
 SEGUNDOS_VACIADO = 2.0
-
-# Si la imagen sale de lado, cambia: 0, 90, 180 o 270.
-ROTACION_CAMARA = 270
+ROTACION_INICIAL = 90  # se puede cambiar con el boton ROTAR en la app
 
 C_AZUL = get_color_from_hex("#185FA5")
 C_AZUL_CLARO = get_color_from_hex("#378ADD")
@@ -259,6 +261,77 @@ class PantallaConfig(Screen):
         self.manager.current = 'camara'
 
 
+# ===========================================================================
+# VISTA DE CAMARA PROPIA: dibuja la imagen YA ROTADA
+# ===========================================================================
+class VistaCamara(Image):
+    """Toma frames de una Camera oculta, los rota, y los muestra.
+    Asi la vista y el analisis usan la MISMA rotacion."""
+    def __init__(self, pantalla, **kwargs):
+        super().__init__(**kwargs)
+        self.p = pantalla
+        self.allow_stretch = True
+        self.keep_ratio = True
+        self.cam = None
+        self.frame_gris_completo = None  # ultimo frame rotado en gris (para ROI)
+        self.tam_frame = (0, 0)          # (W, H) del frame rotado
+        try:
+            # Camera oculta (no se muestra, solo provee frames)
+            self.cam = Camera(play=True)
+            self.cam.opacity = 0
+            self.cam.size_hint = (None, None)
+            self.cam.size = (1, 1)
+        except Exception as e:
+            self._error = str(e)
+            self.cam = None
+        Clock.schedule_interval(self._update, 1.0 / 12.0)
+
+    def _update(self, dt):
+        if self.cam is None or self.cam.texture is None:
+            return
+        tex = self.cam.texture
+        w, h = tex.size
+        if w == 0 or h == 0:
+            return
+        try:
+            arr = np.frombuffer(tex.pixels, dtype=np.uint8).reshape(h, w, 4)
+        except Exception:
+            return
+        rgb = arr[:, :, :3]
+        # Aplicar rotacion actual
+        rot = self.p.rotacion
+        if rot == 90:
+            rgb = np.rot90(rgb, k=1)
+        elif rot == 180:
+            rgb = np.rot90(rgb, k=2)
+        elif rot == 270:
+            rgb = np.rot90(rgb, k=3)
+        rgb = np.ascontiguousarray(rgb)
+        H, W = rgb.shape[:2]
+        self.tam_frame = (W, H)
+        # Guardar gris para el ROI
+        self.frame_gris_completo = a_gris(rgb)
+        # Mostrar en pantalla: crear textura y voltear vertical (coords Kivy)
+        buf = np.flipud(rgb).tobytes()
+        textura = Texture.create(size=(W, H), colorfmt='rgb')
+        textura.blit_buffer(buf, colorfmt='rgb', bufferfmt='ubyte')
+        self.texture = textura
+
+    def roi_gris(self, roi):
+        """Devuelve el recorte en gris del area (roi en fraccion 0-1)."""
+        if self.frame_gris_completo is None:
+            return None
+        g = self.frame_gris_completo
+        H, W = g.shape[:2]
+        x1 = int(min(roi[0], roi[2]) * W)
+        x2 = int(max(roi[0], roi[2]) * W)
+        y1 = int(min(roi[1], roi[3]) * H)
+        y2 = int(max(roi[1], roi[3]) * H)
+        if x2 - x1 < 5 or y2 - y1 < 5:
+            return None
+        return g[y1:y2, x1:x2]
+
+
 class OverlayROI(Widget):
     def __init__(self, pantalla, **kwargs):
         super().__init__(**kwargs)
@@ -286,10 +359,10 @@ class PantallaCamara(Screen):
         self.definiendo = False
         self.roi = [0.3, 0.3, 0.7, 0.7]
         self._arr = False
-        self.cam = None
+        self.vista = None
         self.etapa = 'inicio'
         self._built = False
-        self._rot = ROTACION_CAMARA
+        self.rotacion = ROTACION_INICIAL
 
     def on_enter(self):
         if self._built:
@@ -302,35 +375,35 @@ class PantallaCamara(Screen):
         self.bind(pos=self._u, size=self._u)
         root = BoxLayout(orientation='vertical')
 
-        top = BoxLayout(size_hint=(1, None), height=dp(70), padding=[dp(16), dp(10)])
-        self.lbl_conteo = Label(text='[b]0[/b]', markup=True, font_size='36sp',
-                                color=C_AZUL, size_hint=(None, 1), width=dp(80),
+        # Barra superior
+        top = BoxLayout(size_hint=(1, None), height=dp(66), padding=[dp(16), dp(8)])
+        self.lbl_conteo = Label(text='[b]0[/b]', markup=True, font_size='34sp',
+                                color=C_AZUL, size_hint=(None, 1), width=dp(70),
                                 halign='left', valign='middle')
         self.lbl_conteo.bind(size=lambda *a: setattr(
             self.lbl_conteo, 'text_size', self.lbl_conteo.size))
         top.add_widget(self.lbl_conteo)
         top.add_widget(Label(text='BALONES', font_size='10sp', color=C_GRIS_SUAVE,
-                             size_hint=(None, 1), width=dp(60), halign='left',
+                             size_hint=(None, 1), width=dp(56), halign='left',
                              valign='bottom'))
         self.lbl_estado = Label(text='Estado: --', font_size='12sp',
                                 color=C_GRIS_TEXTO, halign='right', valign='middle')
         self.lbl_estado.bind(size=lambda *a: setattr(
             self.lbl_estado, 'text_size', self.lbl_estado.size))
         top.add_widget(self.lbl_estado)
+        # Boton ROTAR (chico, arriba a la derecha)
+        b_rot = BotonBonito(text='ROTAR', color_fondo=C_AZUL_CLARO,
+                            size_hint=(None, None), size=(dp(64), dp(40)))
+        b_rot.font_size = '12sp'
+        b_rot.bind(on_press=self.rotar)
+        top.add_widget(b_rot)
         root.add_widget(top)
 
+        # Vista de camara propia + overlay
         cam_box = FloatLayout(size_hint=(1, 1))
-        # --- ARREGLO CLAVE: NO forzar resolucion ---
-        # Se deja que la camara elija la resolucion que soporte.
-        try:
-            self.cam = Camera(play=True)
-            self.cam.allow_stretch = True
-            self.cam.keep_ratio = True
-        except Exception as e:
-            self.cam = Label(text='No se pudo abrir la camara:\n%s' % e,
-                             color=C_GRIS_TEXTO, font_size='11sp')
-        self.cam.size_hint = (1, 1)
-        cam_box.add_widget(self.cam)
+        self.vista = VistaCamara(self)
+        self.vista.size_hint = (1, 1)
+        cam_box.add_widget(self.vista)
         self.overlay = OverlayROI(self)
         self.overlay.size_hint = (1, 1)
         cam_box.add_widget(self.overlay)
@@ -350,6 +423,16 @@ class PantallaCamara(Screen):
     def _u(self, *a):
         self._bg.pos = self.pos
         self._bg.size = self.size
+
+    def rotar(self, *a):
+        # Gira 90 grados y resetea la referencia (cambia la orientacion del area)
+        self.rotacion = (self.rotacion + 90) % 360
+        self.contador.referencia = None
+        if self.etapa in ('ref_lista', 'contando'):
+            self.contando = False
+            self.etapa = 'area_lista'
+            self._construir_botones()
+        self.lbl_estado.text = 'Rotacion: %d' % self.rotacion
 
     def _construir_botones(self):
         self.panel.clear_widgets()
@@ -398,16 +481,13 @@ class PantallaCamara(Screen):
         self.panel.add_widget(fila)
 
     def _area_video(self):
+        """(x,y,w,h) del video mostrado dentro del cam_box, con keep_ratio."""
         box = self._cam_box
-        if not isinstance(self.cam, Camera) or self.cam.texture is None:
+        W, H = self.vista.tam_frame
+        if W == 0 or H == 0:
             return box.x, box.y, box.width, box.height
-        tw, th = self.cam.texture.size
-        if tw == 0 or th == 0:
-            return box.x, box.y, box.width, box.height
-        if self._rot in (90, 270):
-            tw, th = th, tw
-        escala = min(box.width / tw, box.height / th)
-        vw, vh = tw * escala, th * escala
+        escala = min(box.width / W, box.height / H)
+        vw, vh = W * escala, H * escala
         vx = box.x + (box.width - vw) / 2
         vy = box.y + (box.height - vh) / 2
         return vx, vy, vw, vh
@@ -453,33 +533,8 @@ class PantallaCamara(Screen):
         self.definiendo = not self.definiendo
         self._construir_botones()
 
-    def _roi_gris(self):
-        if not isinstance(self.cam, Camera) or self.cam.texture is None:
-            return None
-        tex = self.cam.texture
-        w, h = tex.size
-        try:
-            arr = np.frombuffer(tex.pixels, dtype=np.uint8).reshape(h, w, 4)
-        except Exception:
-            return None
-        rgb = arr[:, :, :3]
-        if self._rot == 90:
-            rgb = np.rot90(rgb, k=1)
-        elif self._rot == 180:
-            rgb = np.rot90(rgb, k=2)
-        elif self._rot == 270:
-            rgb = np.rot90(rgb, k=3)
-        H, W = rgb.shape[:2]
-        x1 = int(min(self.roi[0], self.roi[2]) * W)
-        x2 = int(max(self.roi[0], self.roi[2]) * W)
-        y1 = int(min(self.roi[1], self.roi[3]) * H)
-        y2 = int(max(self.roi[1], self.roi[3]) * H)
-        if x2 - x1 < 5 or y2 - y1 < 5:
-            return None
-        return a_gris(rgb[y1:y2, x1:x2])
-
     def capturar_ref(self, *a):
-        g = self._roi_gris()
+        g = self.vista.roi_gris(self.roi)
         if g is None:
             self.lbl_estado.text = 'Area invalida'
             return
@@ -516,7 +571,7 @@ class PantallaCamara(Screen):
 
     def _tick(self, dt):
         if self.contando and self.contador.referencia is not None:
-            g = self._roi_gris()
+            g = self.vista.roi_gris(self.roi)
             if g is not None:
                 self.contador.actualizar(g)
         self.lbl_conteo.text = '[b]%d[/b]' % self.contador.conteo
