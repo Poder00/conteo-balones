@@ -1,19 +1,18 @@
 [app]
 
-title = Conteo Balones
-package.name = conteobalones
-package.domain = com.triton
+title = Detector Balones
+package.name = detectorbalones
+package.domain = com.gas
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
-version = 1.0
+version = 2.0
 
-# Dependencias: SIN opencv. Solo kivy + numpy. Mucho mas probable que compile.
+# Dependencias: solo kivy + numpy (compilan bien, sin opencv ni pillow)
 requirements = python3,kivy,numpy
 
 orientation = portrait
 fullscreen = 0
 
-# Permisos: camara + almacenamiento
 android.permissions = CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 
 android.api = 31
