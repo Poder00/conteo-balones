@@ -36,7 +36,9 @@ jobs:
       - name: Compilar APK
         run: |
           export ANDROID_ACCEPT_SDK_LICENSE=1
-          yes | buildozer android debug || buildozer android debug
+          rm -rf .buildozer ~/.buildozer
+          yes | buildozer android debug
+          
 
       - name: Subir el APK
         uses: actions/upload-artifact@v4
