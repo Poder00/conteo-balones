@@ -306,10 +306,12 @@ class VistaCamara(Image):
             rgb = np.rot90(rgb, k=2)
         elif rot == 270:
             rgb = np.rot90(rgb, k=3)
+        # Corregir efecto espejo: voltear horizontalmente
+        rgb = np.fliplr(rgb)
         rgb = np.ascontiguousarray(rgb)
         H, W = rgb.shape[:2]
         self.tam_frame = (W, H)
-        # Guardar gris para el ROI
+        # Guardar gris para el ROI (ya sin espejo, coincide con lo que se ve)
         self.frame_gris_completo = a_gris(rgb)
         # Mostrar en pantalla: crear textura y voltear vertical (coords Kivy)
         buf = np.flipud(rgb).tobytes()
@@ -401,6 +403,12 @@ class PantallaCamara(Screen):
 
         # Vista de camara propia + overlay
         cam_box = FloatLayout(size_hint=(1, 1))
+        # Fondo oscuro para que las franjas se vean como marco de camara
+        with cam_box.canvas.before:
+            Color(*get_color_from_hex("#1A1D21"))
+            self._cam_bg = Rectangle()
+        cam_box.bind(pos=lambda *a: self._cam_bg_upd(cam_box),
+                     size=lambda *a: self._cam_bg_upd(cam_box))
         self.vista = VistaCamara(self)
         self.vista.size_hint = (1, 1)
         cam_box.add_widget(self.vista)
@@ -423,6 +431,10 @@ class PantallaCamara(Screen):
     def _u(self, *a):
         self._bg.pos = self.pos
         self._bg.size = self.size
+
+    def _cam_bg_upd(self, box):
+        self._cam_bg.pos = box.pos
+        self._cam_bg.size = box.size
 
     def rotar(self, *a):
         # Gira 90 grados y resetea la referencia (cambia la orientacion del area)
