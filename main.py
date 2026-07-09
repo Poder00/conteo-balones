@@ -264,19 +264,20 @@ class PantallaConfig(Screen):
 # ===========================================================================
 # VISTA DE CAMARA PROPIA: dibuja la imagen YA ROTADA
 # ===========================================================================
-class VistaCamara(Image):
-    """Toma frames de una Camera oculta, los rota, y los muestra.
-    Asi la vista y el analisis usan la MISMA rotacion."""
+class VistaCamara(Widget):
+    """Toma frames de una Camera oculta, los rota, y los dibuja CENTRADOS.
+    Al dibujar manualmente controlamos la posicion exacta (centrada),
+    evitando que Kivy alinee la imagen hacia abajo."""
     def __init__(self, pantalla, **kwargs):
         super().__init__(**kwargs)
         self.p = pantalla
-        self.allow_stretch = True
-        self.keep_ratio = True
         self.cam = None
         self.frame_gris_completo = None  # ultimo frame rotado en gris (para ROI)
         self.tam_frame = (0, 0)          # (W, H) del frame rotado
+        self.textura = None
+        # rectangulo del video dentro de este widget (x, y, w, h)
+        self.rect_video = (0, 0, 0, 0)
         try:
-            # Camera oculta (no se muestra, solo provee frames)
             self.cam = Camera(play=True)
             self.cam.opacity = 0
             self.cam.size_hint = (None, None)
@@ -285,6 +286,7 @@ class VistaCamara(Image):
             self._error = str(e)
             self.cam = None
         Clock.schedule_interval(self._update, 1.0 / 12.0)
+        self.bind(pos=self._redibujar, size=self._redibujar)
 
     def _update(self, dt):
         if self.cam is None or self.cam.texture is None:
@@ -298,7 +300,6 @@ class VistaCamara(Image):
         except Exception:
             return
         rgb = arr[:, :, :3]
-        # Aplicar rotacion actual
         rot = self.p.rotacion
         if rot == 90:
             rgb = np.rot90(rgb, k=1)
@@ -306,21 +307,39 @@ class VistaCamara(Image):
             rgb = np.rot90(rgb, k=2)
         elif rot == 270:
             rgb = np.rot90(rgb, k=3)
-        # Corregir efecto espejo: voltear horizontalmente
+        # Corregir efecto espejo
         rgb = np.fliplr(rgb)
         rgb = np.ascontiguousarray(rgb)
         H, W = rgb.shape[:2]
         self.tam_frame = (W, H)
-        # Guardar gris para el ROI (ya sin espejo, coincide con lo que se ve)
         self.frame_gris_completo = a_gris(rgb)
-        # Mostrar en pantalla: crear textura y voltear vertical (coords Kivy)
+        # Crear textura (volteada vertical para coords Kivy)
         buf = np.flipud(rgb).tobytes()
         textura = Texture.create(size=(W, H), colorfmt='rgb')
         textura.blit_buffer(buf, colorfmt='rgb', bufferfmt='ubyte')
-        self.texture = textura
+        self.textura = textura
+        self._redibujar()
+
+    def _redibujar(self, *a):
+        """Dibuja la textura CENTRADA en el widget, sin deformar."""
+        self.canvas.clear()
+        if self.textura is None:
+            return
+        W, H = self.tam_frame
+        if W == 0 or H == 0:
+            return
+        # Escala para caber sin deformar (keep ratio)
+        escala = min(self.width / W, self.height / H)
+        vw, vh = W * escala, H * escala
+        # Centrar dentro del widget
+        vx = self.x + (self.width - vw) / 2
+        vy = self.y + (self.height - vh) / 2
+        self.rect_video = (vx, vy, vw, vh)
+        with self.canvas:
+            Color(1, 1, 1, 1)
+            Rectangle(texture=self.textura, pos=(vx, vy), size=(vw, vh))
 
     def roi_gris(self, roi):
-        """Devuelve el recorte en gris del area (roi en fraccion 0-1)."""
         if self.frame_gris_completo is None:
             return None
         g = self.frame_gris_completo
@@ -410,10 +429,13 @@ class PantallaCamara(Screen):
         cam_box.bind(pos=lambda *a: self._cam_bg_upd(cam_box),
                      size=lambda *a: self._cam_bg_upd(cam_box))
         self.vista = VistaCamara(self)
-        self.vista.size_hint = (1, 1)
+        # Forzar que la vista ocupe EXACTAMENTE el cam_box (no toda la pantalla)
+        self.vista.size_hint = (None, None)
+        cam_box.bind(pos=lambda *a: self._sync_vista(cam_box),
+                     size=lambda *a: self._sync_vista(cam_box))
         cam_box.add_widget(self.vista)
         self.overlay = OverlayROI(self)
-        self.overlay.size_hint = (1, 1)
+        self.overlay.size_hint = (None, None)
         cam_box.add_widget(self.overlay)
         self._cam_box = cam_box
         cam_box.bind(on_touch_down=self._td, on_touch_move=self._tm,
@@ -421,8 +443,8 @@ class PantallaCamara(Screen):
         root.add_widget(cam_box)
 
         self.panel = BoxLayout(orientation='vertical', size_hint=(1, None),
-                               height=dp(150), padding=[dp(14), dp(10)],
-                               spacing=dp(9))
+                               height=dp(124), padding=[dp(12), dp(6)],
+                               spacing=dp(7))
         root.add_widget(self.panel)
         self.add_widget(root)
         Clock.schedule_interval(self._tick, 1.0 / 10.0)
@@ -435,6 +457,13 @@ class PantallaCamara(Screen):
     def _cam_bg_upd(self, box):
         self._cam_bg.pos = box.pos
         self._cam_bg.size = box.size
+
+    def _sync_vista(self, box):
+        # La vista y el overlay ocupan EXACTAMENTE el area del cam_box
+        self.vista.pos = box.pos
+        self.vista.size = box.size
+        self.overlay.pos = box.pos
+        self.overlay.size = box.size
 
     def rotar(self, *a):
         # Gira 90 grados y resetea la referencia (cambia la orientacion del area)
@@ -460,25 +489,25 @@ class PantallaCamara(Screen):
         if self.etapa == 'inicio':
             b = BotonBonito(text='DEFINIR AREA' if not self.definiendo
                             else 'ARRASTRA EN EL VIDEO...', color_fondo=C_AZUL,
-                            size_hint=(1, None), height=dp(50))
+                            size_hint=(1, None), height=dp(46))
             b.bind(on_press=self.toggle_definir)
             self.panel.add_widget(b)
         elif self.etapa == 'area_lista':
             b = BotonBonito(text='CAPTURAR REFERENCIA', color_fondo=C_AZUL,
-                            size_hint=(1, None), height=dp(50))
+                            size_hint=(1, None), height=dp(46))
             b.bind(on_press=self.capturar_ref)
             self.panel.add_widget(b)
         elif self.etapa == 'ref_lista':
             b = BotonBonito(text='INICIAR CONTEO', color_fondo=C_AZUL,
-                            size_hint=(1, None), height=dp(50))
+                            size_hint=(1, None), height=dp(46))
             b.bind(on_press=self.iniciar)
             self.panel.add_widget(b)
         elif self.etapa == 'contando':
             b = BotonBonito(text='PAUSAR Y AJUSTAR', color_fondo=C_AZUL_CLARO,
-                            size_hint=(1, None), height=dp(50))
+                            size_hint=(1, None), height=dp(46))
             b.bind(on_press=self.pausar)
             self.panel.add_widget(b)
-        fila = BoxLayout(size_hint=(1, None), height=dp(44), spacing=dp(8))
+        fila = BoxLayout(size_hint=(1, None), height=dp(40), spacing=dp(8))
         b_reg = BotonBonito(text='REGRESAR', color_texto=C_GRIS_TEXTO,
                             borde=(C_BORDE, dp(1.5)), size_hint=(0.5, 1))
         b_reg.font_size = '13sp'
@@ -493,15 +522,11 @@ class PantallaCamara(Screen):
         self.panel.add_widget(fila)
 
     def _area_video(self):
-        """(x,y,w,h) del video mostrado dentro del cam_box, con keep_ratio."""
-        box = self._cam_box
-        W, H = self.vista.tam_frame
-        if W == 0 or H == 0:
+        """(x,y,w,h) reales del video, tomados directo de la vista centrada."""
+        vx, vy, vw, vh = self.vista.rect_video
+        if vw == 0 or vh == 0:
+            box = self._cam_box
             return box.x, box.y, box.width, box.height
-        escala = min(box.width / W, box.height / H)
-        vw, vh = W * escala, H * escala
-        vx = box.x + (box.width - vw) / 2
-        vy = box.y + (box.height - vh) / 2
         return vx, vy, vw, vh
 
     def roi_en_pantalla(self):
